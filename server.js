@@ -356,7 +356,37 @@ app.get("/run-scrape", async (req, res) => {
         res.status(500).send("Error al guardar los eventos en la bodega. Revisa los logs.");
     }
 });
+// --- Nuevo API Endpoint para el Chatbot ---
+app.post("/recommend-event-ai", express.json(), async (req, res) => {
+    const { question, currentEvents } = req.body; // Recibe la pregunta y los eventos actuales
+    if (!geminiModel) {
+        return res.status(500).json({ error: "El modelo de IA para el chatbot no está inicializado." });
+    }
 
+    try {
+        // El prompt debe instruir a la IA a actuar como un asistente de eventos
+        // y a basar sus recomendaciones en 'currentEvents' si se proporcionan,
+        // o a preguntar más detalles si no puede ayudar.
+        const chatPrompt = `Eres un asistente amable y útil para recomendar eventos en Chile.
+        El usuario pregunta: "${question}".
+        
+        Aquí hay una lista de eventos disponibles que podrían ser relevantes (si la lista está vacía, no hay eventos cargados):
+        ${currentEvents && currentEvents.length > 0 ? JSON.stringify(currentEvents.slice(0, 15), null, 2) : 'No hay eventos específicos cargados en la lista actual del usuario.'}
+        
+        Basado en la pregunta del usuario y los eventos disponibles:
+        1. Si la pregunta es sobre un tipo de evento o característica (ej. "eventos gratis", "conciertos en Santiago", "planes para familia"), intenta recomendar 1-3 eventos *específicos* de la lista proporcionada. Si no hay ninguno que coincida, díselo amablemente.
+        2. Si la pregunta es muy general ("¿qué hay hoy?", "¿qué me recomiendas?"), sugiere que el usuario use los filtros de la página o que especifique más qué tipo de plan busca.
+        3. Mantén tus respuestas concisas y amigables. No inventes eventos que no estén en la lista. Si no puedes responder con los eventos dados, di que no encontraste un evento específico para su solicitud y sugiere usar los filtros o preguntar de otra manera.`;
+
+        const result = await geminiModel.generateContent(chatPrompt);
+        const responseText = result.response.text();
+        res.json({ recommendation: responseText });
+
+    } catch (error) {
+        console.error("Error en el endpoint de recomendación de IA:", error);
+        res.status(500).json({ error: "No se pudo generar una recomendación en este momento. Intenta de nuevo más tarde." });
+    }
+});
 const listener = app.listen(process.env.PORT || 3000, () => {
     console.log("Tu app Eventis v9.4 está escuchando en el puerto " + listener.address().port);
 });
