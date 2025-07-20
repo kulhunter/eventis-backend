@@ -1,4 +1,4 @@
-// server.js - v10.2 (Eventbrite Paginación + Fuentes Optimizadas + Chatbot AI)
+// server.js - v10.3 (Filtro de Eventos Futuros + Eventbrite Paginación + Fuentes Optimizadas + Chatbot AI)
 // Este robot utiliza IA para analizar y reescribir la información de eventos.
 
 const express = require("express");
@@ -234,6 +234,9 @@ const MAX_EVENTBRITE_PAGES = 5;
 
 async function fetchAllEvents() {
     let allEvents = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // Establecer la hora a medianoche para comparar solo la fecha
+
     const fetchPromises = sources.map(async (source) => {
         try {
             let items = [];
@@ -288,33 +291,45 @@ async function fetchAllEvents() {
                 console.log(`[${source.name}] Items brutos extraídos (antes de IA): ${items.length}`);
             }
 
-            // --- PROCESAMIENTO CON IA ---
+            // --- PROCESAMIENTO CON IA Y FILTRO DE FECHA FUTURA ---
             for (const item of items) {
-                const eventDataForAI = {
-                    name: item.name,
-                    description: item.description,
-                    sourceUrl: item.sourceUrl,
-                    imageUrl: item.imageUrl,
-                    location: item.location || source.city,
-                    rawDate: item.rawDate
-                };
+                let isFutureEvent = true;
+                if (item.rawDate) {
+                    const eventDate = new Date(item.rawDate);
+                    eventDate.setHours(0, 0, 0, 0); // Normalizar a medianoche para comparación
+                    if (eventDate < today) {
+                        isFutureEvent = false;
+                        console.log(`[Filtro Fecha] Evento descartado por ser pasado (${source.name}): "${item.name.substring(0, 50)}..." (Fecha: ${item.rawDate})`);
+                    }
+                }
 
-                const aiProcessedResult = await processWithAI(eventDataForAI);
+                if (isFutureEvent) {
+                    const eventDataForAI = {
+                        name: item.name,
+                        description: item.description,
+                        sourceUrl: item.sourceUrl,
+                        imageUrl: item.imageUrl,
+                        location: item.location || source.city,
+                        rawDate: item.rawDate
+                    };
 
-                if (aiProcessedResult && aiProcessedResult.isEvent) {
-                    allEvents.push({
-                        name: aiProcessedResult.name,
-                        description: aiProcessedResult.description,
-                        imageUrl: item.imageUrl, 
-                        sourceUrl: aiProcessedResult.sourceUrl,
-                        city: aiProcessedResult.location, 
-                        planType: aiProcessedResult.planType,
-                        budget: aiProcessedResult.budget,
-                        location: aiProcessedResult.location, 
-                        date: aiProcessedResult.date
-                    });
-                } else {
-                    console.log(`[IA Gemini] Evento descartado por IA o no procesado (${source.name}): "${item.name.substring(0, 50)}..."`);
+                    const aiProcessedResult = await processWithAI(eventDataForAI);
+
+                    if (aiProcessedResult && aiProcessedResult.isEvent) {
+                        allEvents.push({
+                            name: aiProcessedResult.name,
+                            description: aiProcessedResult.description,
+                            imageUrl: item.imageUrl, 
+                            sourceUrl: aiProcessedResult.sourceUrl,
+                            city: aiProcessedResult.location, 
+                            planType: aiProcessedResult.planType,
+                            budget: aiProcessedResult.budget,
+                            location: aiProcessedResult.location, 
+                            date: aiProcessedResult.date
+                        });
+                    } else {
+                        console.log(`[IA Gemini] Evento descartado por IA o no procesado (${source.name}): "${item.name.substring(0, 50)}..."`);
+                    }
                 }
             }
         } catch (error) { 
@@ -330,7 +345,7 @@ async function fetchAllEvents() {
 }
 
 // --- API ENDPOINTS ---
-app.get("/", (req, res) => res.send("Motor de Eventis v10.2 funcionando (Eventbrite Paginación + Fuentes Optimizadas + Chatbot)."));
+app.get("/", (req, res) => res.send("Motor de Eventis v10.3 funcionando (Filtro de Eventos Futuros + Eventbrite Paginación + Fuentes Optimizadas + Chatbot)."));
 
 app.get("/events", async (req, res) => {
     if (!JSONBIN_API_KEY || !JSONBIN_BIN_ID) {
@@ -414,5 +429,5 @@ Basado en la pregunta del usuario y los eventos disponibles:
 
 
 const listener = app.listen(process.env.PORT || 3000, () => {
-    console.log("Tu app Eventis v10.2 está escuchando en el puerto " + listener.address().port);
+    console.log("Tu app Eventis v10.3 está escuchando en el puerto " + listener.address().port);
 });
