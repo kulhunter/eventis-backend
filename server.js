@@ -1,4 +1,4 @@
-// server.js - v10.0 (Fuentes Optimizadas y Chatbot AI)
+// server.js - v10.2 (Eventbrite Paginación + Fuentes Optimizadas + Chatbot AI)
 // Este robot utiliza IA para analizar y reescribir la información de eventos.
 
 const express = require("express");
@@ -10,7 +10,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 app.use(cors());
-app.use(express.json()); // <-- NECESARIO para que el chatbot pueda enviar JSON al backend
+app.use(express.json()); // NECESARIO para que el chatbot pueda enviar JSON al backend
 
 // --- CONFIGURACIÓN DE SECRETOS (se deben añadir en Render) ---
 const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY;
@@ -53,8 +53,6 @@ const scrapeRssFeed = (feed) => {
 
 const scrapeHtmlArticle = ($, baseURI) => {
     const events = [];
-    // Selectores más específicos pueden ser necesarios para cada fuente si dan malos resultados
-    // Mantenemos los selectores amplios, confiando más en la IA para el filtrado de calidad
     $("article, .evento, .event-item, .activity-card, .post-card, .card, .columna, .noticia-item, .item-list").each((index, element) => {
         try {
             const titleElement = $(element).find("h1, h2, h3, .title, .nombre-evento, .card-title, .entry-title").first();
@@ -66,12 +64,10 @@ const scrapeHtmlArticle = ($, baseURI) => {
             if (url && !url.startsWith('http')) url = new URL(url, baseURI).href;
             if (imageUrl && !imageUrl.startsWith('http')) imageUrl = new URL(imageUrl, baseURI).href;
 
-            // Filtro básico pre-IA para descartar contenido obvio no-evento o muy corto.
-            // La IA hará el trabajo pesado, pero esto reduce llamadas innecesarias a la IA.
             if (title.toLowerCase().includes("buscador bn") || title.toLowerCase().includes("ver más") || 
                 title.toLowerCase().includes("noticia") || title.toLowerCase().includes("comunicado") ||
                 title.toLowerCase().includes("balance municipal") ||
-                description.length < 30 && title.length < 20 // Descartar si ambos son muy cortos
+                description.length < 30 && title.length < 20 
                ) {
                 return;
             }
@@ -132,7 +128,7 @@ Si es un evento válido, responde SOLAMENTE con un JSON en este formato:
   "name": "Nombre conciso y atractivo del evento (ej. Concierto de Jazz, Exposición de Arte). Máximo 80 caracteres.",
   "description": "Descripción breve y clara del evento, explicando qué es y por qué es interesante. Máximo 150 caracteres. Evita frases como 'click aquí', 'más información', 'lee el artículo completo'.",
   "location": "Ubicación específica del evento (ej. 'Parque O'Higgins, Santiago', 'Online', 'Teatro Municipal de Valparaíso'). SIEMPRE debe ser un lugar físico o 'Online'. Si es un lugar muy genérico como solo 'Santiago' o 'Nacional', intenta ser más específico. Si no hay ubicación clara, pon 'Por confirmar'.",
-  "date": "Fecha del evento en formato AAAA-MM-DD (ej. '2025-08-15'). Si es un rango de fechas, pon la fecha de inicio. Si es un evento continuo sin fecha de inicio fija o una actividad genérica sin fecha clara, pon 'Sin fecha'.",
+  "date": "Fecha del evento en formato AAAA-MM-DD (ej. '2025-08-15'). Si es un rango de fechas, pon la fecha de inicio. Si no hay fecha clara o es evento continuo, pon 'Sin fecha'.",
   "budget": 0 | 10 | 20 | 30 | 40 | 50 | 51, // 0 para Gratis, -1 para precio desconocido, 10 para <=10 USD, 20 para <=20 USD, etc., 51 para >50 USD.
   "planType": "solo" | "pareja" | "grupo" | "familiar" | "cualquiera", // Cómo se disfruta mejor el evento
   "sourceUrl": "URL original del evento"
@@ -157,7 +153,6 @@ Fecha Original (si aplica): ${eventData.rawDate || 'No especificado'}
             const parsedResult = JSON.parse(jsonString);
 
             if (parsedResult.isEvent) {
-                // Validación básica de los campos después del parseo de la IA
                 parsedResult.name = (parsedResult.name && parsedResult.name.length <= 80) ? parsedResult.name : eventData.name?.substring(0,80) || 'Evento sin título';
                 parsedResult.description = (parsedResult.description && parsedResult.description.length <= 150) ? parsedResult.description : eventData.description?.substring(0,150) || 'Sin descripción.';
                 parsedResult.location = parsedResult.location || eventData.location || 'Por confirmar';
@@ -179,7 +174,9 @@ Fecha Original (si aplica): ${eventData.rawDate || 'No especificado'}
 // --- LISTA DE FUENTES PROPORCIONADA POR EL USUARIO (Optimizada) ---
 const sources = [
     // API
-    { name: "Eventbrite", type: "api", city: "Santiago", scrape: scrapeEventbriteApi }, // Mantener Santiago, o duplicar para otras ciudades principales
+    { name: "Eventbrite (API)", type: "api", city: "Santiago", scrape: scrapeEventbriteApi }, 
+    // Fuente HTML de Eventbrite. Nota: Es probable que no capture muchos eventos debido a la carga dinámica de la web.
+    { name: "Eventbrite (Web HTML)", type: "html", url: "https://www.eventbrite.cl/d/chile/events/", city: "Nacional", scrape: scrapeHtmlArticle },
 
     // Nivel 1 - Agregadores y Culturales Grandes (Alta probabilidad de eventos)
     { name: "PanoramasGratis.cl", type: "html", url: "https://panoramasgratis.cl/", city: "Nacional", scrape: scrapeHtmlArticle },
@@ -187,7 +184,7 @@ const sources = [
     { name: "ValpoCultura.cl", type: "html", url: "https://valpocultura.cl/", city: "Valparaíso", scrape: scrapeHtmlArticle },
     { name: "ConcepciónCultural.cl", type: "html", url: "https://www.concepcioncultural.cl/", city: "Concepción", scrape: scrapeHtmlArticle },
     { name: "TodoEnConce.cl", type: "html", url: "https://www.todoenconce.cl/", city: "Concepción", scrape: scrapeHtmlArticle },
-    { name: "Día de los Patrimonios", type: "html", url: "https://www.diadelospatrimonios.cl/", city: "Nacional", scrape: scrapeHtmlArticle }, // Evento anual, pero importante
+    { name: "Día de los Patrimonios", type: "html", url: "https://www.diadelospatrimonios.cl/", city: "Nacional", scrape: scrapeHtmlArticle }, 
     { name: "Centro Gabriela Mistral (GAM)", type: "html", url: "https://gam.cl/cartelera/", city: "Santiago", scrape: scrapeHtmlArticle },
     { name: "Centro Cultural La Moneda", type: "html", url: "https://www.cclm.cl/actividades/", city: "Santiago", scrape: scrapeHtmlArticle },
     { name: "Teatro Municipal de Santiago", type: "html", url: "https://municipal.cl/cartelera", city: "Santiago", scrape: scrapeHtmlArticle },
@@ -205,18 +202,18 @@ const sources = [
     { name: "Museo Chileno de Arte Precolombino", type: "html", url: "https://museo.precolombino.cl/", city: "Santiago", scrape: scrapeHtmlArticle },
     { name: "Museo Artequin", type: "html", url: "https://artequin.cl/", city: "Santiago", scrape: scrapeHtmlArticle },
 
-    // Nivel 3 - Especializados (Cine, Música, Deportes - si el usuario los quiere, pueden no ser gratis)
+    // Nivel 3 - Especializados
     { name: "Cineteca Nacional de Chile", type: "html", url: "https://www.cclm.cl/cineteca-nacional-de-chile/", city: "Santiago", scrape: scrapeHtmlArticle },
     { name: "CineChile.cl", type: "html", url: "https://cinechile.cl/cartelera/", city: "Nacional", scrape: scrapeHtmlArticle },
-    { name: "Retina Latina", type: "html", url: "https://www.retinalatina.org/", city: "Nacional", scrape: scrapeHtmlArticle }, // Cine online, a menudo gratis
-    { name: "Testing en Chile", type: "html", url: "https://www.testingenchile.cl/", city: "Santiago", scrape: scrapeHtmlArticle }, // Eventos IT
-    { name: "Congreso Futuro", type: "html", url: "https://congresofuturo.cl/", city: "Nacional", scrape: scrapeHtmlArticle }, // Gran evento anual
-    { name: "Bicineta.cl", type: "html", url: "https://www.bicineta.cl/eventos", city: "Nacional", scrape: scrapeHtmlArticle }, // Eventos de ciclismo
-    { name: "IBBY Chile", type: "html", url: "https://www.ibbychile.cl/", city: "Santiago", scrape: scrapeHtmlArticle }, // Literatura infantil
-    { name: "Calavera Lectora", type: "html", url: "https://calaveralectora.org/", city: "Nacional", scrape: scrapeHtmlArticle }, // Literatura
-    { name: "Bandsintown", type: "html", url: "https://www.bandsintown.com/es/c/chile", city: "Nacional", scrape: scrapeHtmlArticle }, // Conciertos (pueden ser de pago)
+    { name: "Retina Latina", type: "html", url: "https://www.retinalatina.org/", city: "Nacional", scrape: scrapeHtmlArticle }, 
+    { name: "Testing en Chile", type: "html", url: "https://www.testingenchile.cl/", city: "Santiago", scrape: scrapeHtmlArticle }, 
+    { name: "Congreso Futuro", type: "html", url: "https://congresofuturo.cl/", city: "Nacional", scrape: scrapeHtmlArticle }, 
+    { name: "Bicineta.cl", type: "html", url: "https://www.bicineta.cl/eventos", city: "Nacional", scrape: scrapeHtmlArticle }, 
+    { name: "IBBY Chile", type: "html", url: "https://www.ibbychile.cl/", city: "Santiago", scrape: scrapeHtmlArticle }, 
+    { name: "Calavera Lectora", type: "html", url: "https://calaveralectora.org/", city: "Nacional", scrape: scrapeHtmlArticle }, 
+    { name: "Bandsintown", type: "html", url: "https://www.bandsintown.com/es/c/chile", city: "Nacional", scrape: scrapeHtmlArticle }, 
 
-    // Nivel 4 - RSS Feeds (Alta calidad si filtran bien con IA)
+    // Nivel 4 - RSS Feeds
     { name: "Santiago Secreto (RSS)", type: "rss", url: "https://santiagosecreto.com/feed/", city: "Santiago", scrape: scrapeRssFeed },
     { name: "La Tercera Finde (RSS)", type: "rss", url: "https://www.latercera.com/finde/feed/", city: "Nacional", scrape: scrapeRssFeed },
     { name: "Chilevisión Panoramas (RSS)", type: "rss", url: "https://www.chilevision.cl/tag/panoramas-gratis/feed", city: "Nacional", scrape: scrapeRssFeed },
@@ -224,17 +221,16 @@ const sources = [
     { name: "El Mostrador Cultura (RSS)", type: "rss", url: "https://www.elmostrador.cl/cultura/feed/", city: "Nacional", scrape: scrapeRssFeed },
     { name: "Diario Concepción Cultura (RSS)", type: "rss", url: "https://www.diarioconcepcion.cl/cultura/feed/", city: "Concepción", scrape: scrapeRssFeed },
     
-    // Nivel 5 - Municipalidades principales con sección de cultura/agenda (Requiere que la IA filtre bien)
-    { name: "Municipalidad de Antofagasta", type: "html", url: "https://www.municipalidadantofagasta.cl/cultura/", city: "Antofagasta", scrape: scrapeHtmlArticle }, // URL más específica si existe
-    { name: "Municipalidad de La Serena", type: "html", url: "https://www.laserena.cl/agenda/", city: "La Serena", scrape: scrapeHtmlArticle }, // URL más específica si existe
-    { name: "Municipalidad de Coquimbo", type: "html", url: "https://www.municoquimbo.cl/cultura/", city: "Coquimbo", scrape: scrapeHtmlArticle }, // URL más específica si existe
-    { name: "Municipalidad de Viña del Mar", type: "html", url: "https://www.munivina.cl/agenda/", city: "Viña del Mar", scrape: scrapeHtmlArticle }, // URL más específica si existe
-    { name: "Municipalidad de Puerto Montt", type: "html", url: "https://www.puertomontt.cl/cultura/", city: "Puerto Montt", scrape: scrapeHtmlArticle }, // URL más específica si existe
-    // NOTA: Para las municipalidades, idealmente deberías buscar la URL directa de su sección "Agenda" o "Cultura"
-    // en lugar de la portada, para obtener mejores resultados y menos "ruido". Si las URL de arriba no existen,
-    // usa la portada y confía mucho en la IA.
+    // Nivel 5 - Municipalidades principales con sección de cultura/agenda
+    { name: "Municipalidad de Antofagasta", type: "html", url: "https://www.municipalidadantofagasta.cl/cultura/", city: "Antofagasta", scrape: scrapeHtmlArticle }, 
+    { name: "Municipalidad de La Serena", type: "html", url: "https://www.laserena.cl/agenda/", city: "La Serena", scrape: scrapeHtmlArticle }, 
+    { name: "Municipalidad de Coquimbo", type: "html", url: "https://www.municoquimbo.cl/cultura/", city: "Coquimbo", scrape: scrapeHtmlArticle }, 
+    { name: "Municipalidad de Viña del Mar", type: "html", url: "https://www.munivina.cl/agenda/", city: "Viña del Mar", scrape: scrapeHtmlArticle }, 
+    { name: "Municipalidad de Puerto Montt", type: "html", url: "https://www.puertomontt.cl/cultura/", city: "Puerto Montt", scrape: scrapeHtmlArticle }, 
 ];
 
+// Límite de páginas para la paginación de Eventbrite para evitar llamadas excesivas
+const MAX_EVENTBRITE_PAGES = 5; 
 
 async function fetchAllEvents() {
     let allEvents = [];
@@ -243,37 +239,53 @@ async function fetchAllEvents() {
             let items = [];
             if (source.type === 'api') {
                 if (!EVENTBRITE_API_TOKEN) {
-                    console.error("[Eventbrite] EVENTBRITE_API_TOKEN no está configurado.");
+                    console.error(`[${source.name}] EVENTBRITE_API_TOKEN no está configurado.`);
                     return;
                 }
-                const apiUrl = `https://www.eventbriteapi.com/v3/events/search/?location.address=${encodeURIComponent(source.city)}%2C+Chile&price=free&page_size=50&token=${EVENTBRITE_API_TOKEN}`;
-                console.log(`[Eventbrite] Intentando buscar en URL: ${apiUrl}`);
-                try {
-                    const { data } = await axios.get(apiUrl, { 
-                        headers: { 
-                            'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-                            'Accept': 'application/json' 
-                        }, 
-                        timeout: 15000 
-                    });
-                    console.log(`[Eventbrite] Respuesta cruda (primeros 500 chars): ${JSON.stringify(data).substring(0, 500)}...`);
-                    items = source.scrape(data);
-                    console.log(`[Eventbrite] Items brutos extraídos (antes de IA): ${items.length}`);
-                } catch (apiError) {
-                    console.error(`[Eventbrite] Error en la llamada API para ${source.city}:`, apiError.message);
-                    if (apiError.response) {
-                        console.error(`[Eventbrite] Status: ${apiError.response.status}, Data: ${JSON.stringify(apiError.response.data)}`);
+                
+                let currentPage = 1;
+                let hasMorePages = true;
+                
+                while (hasMorePages && currentPage <= MAX_EVENTBRITE_PAGES) {
+                    const apiUrl = `https://www.eventbriteapi.com/v3/events/search/?location.address=${encodeURIComponent(source.city)}%2C+Chile&price=free&page_size=50&page=${currentPage}&token=${EVENTBRITE_API_TOKEN}`;
+                    console.log(`[${source.name}] Intentando buscar en URL (página ${currentPage}): ${apiUrl}`);
+                    try {
+                        const { data } = await axios.get(apiUrl, { 
+                            headers: { 
+                                'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+                                'Accept': 'application/json' 
+                            }, 
+                            timeout: 15000 
+                        });
+                        console.log(`[${source.name}] Respuesta cruda (página ${currentPage}, primeros 500 chars): ${JSON.stringify(data).substring(0, 500)}...`);
+                        
+                        const newItems = source.scrape(data);
+                        items = items.concat(newItems);
+                        console.log(`[${source.name}] Página ${currentPage} extrajo ${newItems.length} ítems. Total hasta ahora: ${items.length}`);
+
+                        // Verificar si hay más páginas según la API de Eventbrite
+                        hasMorePages = data.pagination && data.pagination.has_more_items;
+                        currentPage++;
+
+                    } catch (apiError) {
+                        console.error(`[${source.name}] Error en la llamada API para ${source.city} (página ${currentPage}):`, apiError.message);
+                        if (apiError.response) {
+                            console.error(`[${source.name}] Status: ${apiError.response.status}, Data: ${JSON.stringify(apiError.response.data)}`);
+                        }
+                        hasMorePages = false; // Detener paginación si hay un error
                     }
                 }
+                console.log(`[${source.name}] Paginación completada. Total de ítems brutos extraídos (antes de IA): ${items.length}`);
+
             } else { // HTML o RSS
-                console.log(`[Scraping] Intentando buscar en: ${source.url}`);
+                console.log(`[${source.name}] Intentando buscar en: ${source.url}`);
                 const { data } = await axios.get(source.url, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 10000 });
                 if (source.type === 'rss') {
                     items = scrapeRssFeed({ rss: { channel: [{ item: await parseStringPromise(data).then(p => p.rss.channel[0].item) }] } });
                 } else { // html
                     items = scrapeHtmlArticle(cheerio.load(data), source.url);
                 }
-                console.log(`[Scraping] Items brutos extraídos de ${source.name} (antes de IA): ${items.length}`);
+                console.log(`[${source.name}] Items brutos extraídos (antes de IA): ${items.length}`);
             }
 
             // --- PROCESAMIENTO CON IA ---
@@ -293,16 +305,16 @@ async function fetchAllEvents() {
                     allEvents.push({
                         name: aiProcessedResult.name,
                         description: aiProcessedResult.description,
-                        imageUrl: item.imageUrl, // Mantiene la URL de imagen original
+                        imageUrl: item.imageUrl, 
                         sourceUrl: aiProcessedResult.sourceUrl,
-                        city: aiProcessedResult.location, // La IA debería dar una ubicación más específica
+                        city: aiProcessedResult.location, 
                         planType: aiProcessedResult.planType,
                         budget: aiProcessedResult.budget,
                         location: aiProcessedResult.location, 
                         date: aiProcessedResult.date
                     });
                 } else {
-                    console.log(`[IA Gemini] Evento descartado por IA o no procesado: "${item.name.substring(0, 50)}..."`);
+                    console.log(`[IA Gemini] Evento descartado por IA o no procesado (${source.name}): "${item.name.substring(0, 50)}..."`);
                 }
             }
         } catch (error) { 
@@ -318,7 +330,7 @@ async function fetchAllEvents() {
 }
 
 // --- API ENDPOINTS ---
-app.get("/", (req, res) => res.send("Motor de Eventis v10.0 funcionando (Fuentes Optimizadas + Chatbot)."));
+app.get("/", (req, res) => res.send("Motor de Eventis v10.2 funcionando (Eventbrite Paginación + Fuentes Optimizadas + Chatbot)."));
 
 app.get("/events", async (req, res) => {
     if (!JSONBIN_API_KEY || !JSONBIN_BIN_ID) {
@@ -360,14 +372,13 @@ app.get("/run-scrape", async (req, res) => {
 
 // --- NUEVO ENDPOINT PARA EL CHATBOT DE IA ---
 app.post("/recommend-event-ai", async (req, res) => {
-    const { question, currentEvents } = req.body; // Recibe la pregunta del usuario y los eventos que el frontend ya tiene
+    const { question, currentEvents } = req.body; 
     
     if (!geminiModel) {
         return res.status(500).json({ error: "El modelo de IA para el chatbot no está inicializado. Verifica GEMINI_API_KEY." });
     }
 
     try {
-        // Prepara los eventos para el contexto de la IA. Limita para no exceder tokens.
         const eventsContext = currentEvents && currentEvents.length > 0
             ? currentEvents.slice(0, 15).map(e => ({
                 name: e.name,
@@ -403,5 +414,5 @@ Basado en la pregunta del usuario y los eventos disponibles:
 
 
 const listener = app.listen(process.env.PORT || 3000, () => {
-    console.log("Tu app Eventis v10.0 está escuchando en el puerto " + listener.address().port);
+    console.log("Tu app Eventis v10.2 está escuchando en el puerto " + listener.address().port);
 });
