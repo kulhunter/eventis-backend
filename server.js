@@ -1,4 +1,4 @@
-// server.js - v9.2 (Versión final con correcciones y IA Gemini)
+// server.js - v9.3 (Versión final con modelo Gemini 2.0-flash)
 // Este robot utiliza IA para analizar y reescribir la información de eventos.
 
 const express = require("express");
@@ -24,10 +24,9 @@ const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
 let geminiModel;
 if (GEMINI_API_KEY) {
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-    // Cambiado a 'gemini-1.0-pro' para mayor compatibilidad y disponibilidad
-    // Si este modelo sigue dando 404, prueba con 'gemini-1.5-flash' o 'gemini-1.5-pro'
-    geminiModel = genAI.getGenerativeModel({ model: "gemini-1.0-pro" }); 
-    console.log("IA Gemini inicializada con modelo gemini-1.0-pro.");
+    // ¡MODELO FINALMENTE CONFIGURADO A gemini-2.0-flash QUE FUNCIONÓ!
+    geminiModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); 
+    console.log("IA Gemini inicializada con modelo gemini-2.0-flash.");
 } else {
     console.warn("ADVERTENCIA: GEMINI_API_KEY no está configurada. La IA no se utilizará para el análisis.");
 }
@@ -317,7 +316,7 @@ async function fetchAllEvents() {
 }
 
 // --- API ENDPOINTS ---
-app.get("/", (req, res) => res.send("Motor de Eventis v9.2 funcionando (con IA Gemini)."));
+app.get("/", (req, res) => res.send("Motor de Eventis v9.3 funcionando (con IA Gemini)."));
 
 app.get("/events", async (req, res) => {
     if (!JSONBIN_API_KEY || !JSONBIN_BIN_ID) {
@@ -358,5 +357,5 @@ app.get("/run-scrape", async (req, res) => {
 });
 
 const listener = app.listen(process.env.PORT || 3000, () => {
-    console.log("Tu app Eventis v9.2 está escuchando en el puerto " + listener.address().port);
+    console.log("Tu app Eventis v9.3 está escuchando en el puerto " + listener.address().port);
 });
