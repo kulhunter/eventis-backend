@@ -1,4 +1,4 @@
-// server.js - v9.4 (Versión final consolidada)
+// server.js - v10.0 (Fuentes Optimizadas y Chatbot AI)
 // Este robot utiliza IA para analizar y reescribir la información de eventos.
 
 const express = require("express");
@@ -10,6 +10,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 app.use(cors());
+app.use(express.json()); // <-- NECESARIO para que el chatbot pueda enviar JSON al backend
 
 // --- CONFIGURACIÓN DE SECRETOS (se deben añadir en Render) ---
 const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY;
@@ -24,7 +25,6 @@ const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
 let geminiModel;
 if (GEMINI_API_KEY) {
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-    // Modelo configurado a 'gemini-2.0-flash' que ha demostrado ser accesible
     geminiModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); 
     console.log("IA Gemini inicializada con modelo gemini-2.0-flash.");
 } else {
@@ -53,18 +53,26 @@ const scrapeRssFeed = (feed) => {
 
 const scrapeHtmlArticle = ($, baseURI) => {
     const events = [];
-    $("article, .evento, .event-item, .activity-card, .post-card, .card").each((index, element) => {
+    // Selectores más específicos pueden ser necesarios para cada fuente si dan malos resultados
+    // Mantenemos los selectores amplios, confiando más en la IA para el filtrado de calidad
+    $("article, .evento, .event-item, .activity-card, .post-card, .card, .columna, .noticia-item, .item-list").each((index, element) => {
         try {
-            const titleElement = $(element).find("h1, h2, h3, .title, .nombre-evento, .card-title").first();
+            const titleElement = $(element).find("h1, h2, h3, .title, .nombre-evento, .card-title, .entry-title").first();
             const title = titleElement.text().trim();
             let url = titleElement.find("a").attr("href") || $(element).find("a").first().attr("href");
-            const description = $(element).find("p, .description, .bajada, .card-text").first().text().trim();
+            const description = $(element).find("p, .description, .bajada, .card-text, .entry-summary").first().text().trim();
             let imageUrl = $(element).find("img").attr('src');
 
             if (url && !url.startsWith('http')) url = new URL(url, baseURI).href;
             if (imageUrl && !imageUrl.startsWith('http')) imageUrl = new URL(imageUrl, baseURI).href;
 
-            if (title.toLowerCase().includes("buscador bn") || title.toLowerCase().includes("ver más") || description.length < 15) {
+            // Filtro básico pre-IA para descartar contenido obvio no-evento o muy corto.
+            // La IA hará el trabajo pesado, pero esto reduce llamadas innecesarias a la IA.
+            if (title.toLowerCase().includes("buscador bn") || title.toLowerCase().includes("ver más") || 
+                title.toLowerCase().includes("noticia") || title.toLowerCase().includes("comunicado") ||
+                title.toLowerCase().includes("balance municipal") ||
+                description.length < 30 && title.length < 20 // Descartar si ambos son muy cortos
+               ) {
                 return;
             }
 
@@ -108,20 +116,24 @@ const scrapeEventbriteApi = (apiResponse) => {
 async function processWithAI(eventData) {
     if (!geminiModel) {
         console.warn("[IA Gemini] Modelo no inicializado. Saltando análisis con IA.");
-        return { isEvent: false };
+        return { isEvent: false }; 
     }
 
-    const prompt = `Analiza el siguiente contenido que podría ser un evento.
-Si es un evento público y accionable (no una noticia, un artículo, un anuncio genérico o una llamada a la acción como "ver más"), extrae la siguiente información.
-Si NO es un evento, o no se puede extraer la información clave, responde SOLAMENTE con un JSON: {"isEvent": false}.
-Si es un evento, responde SOLAMENTE con un JSON en este formato:
+    const prompt = `Analiza el siguiente contenido que podría ser un evento público y accionable en Chile.
+Para que sea un evento válido, DEBE ser una actividad a la que una persona pueda asistir, participar o ver (no una noticia, un comunicado de prensa, un artículo, un llamado a la acción genérico, una reapertura de instalaciones, una demolición, un balance municipal, un concurso o un programa continuo).
+
+Si el contenido describe un EVENTO VÁLIDO, y si tiene una FECHA o un PERÍODO CLARO y una UBICACIÓN (física o 'Online') CLARA, extrae la siguiente información.
+
+Si NO es un evento válido, o si no cumple con los criterios de FECHA/UBICACIÓN CLARA o no se puede extraer la información clave, responde SOLAMENTE con un JSON: {"isEvent": false}.
+
+Si es un evento válido, responde SOLAMENTE con un JSON en este formato:
 {
   "isEvent": true,
-  "name": "Nombre conciso y atractivo del evento",
-  "description": "Descripción breve y clara del evento, máximo 150 caracteres. Evita frases como 'click aquí' o 'más información'.",
-  "location": "Ubicación del evento (ej. 'Santiago', 'Parque X', 'Online')",
-  "date": "Fecha del evento en formato AAAA-MM-DD (ej. '2025-08-15'). Si hay rango de fechas, pon la de inicio. Si no hay fecha clara o es evento continuo, pon 'Sin fecha'.",
-  "budget": 0 | 10 | 20 | 30 | 40 | 50 | 51, // 0 para gratis, -1 para precio desconocido, 10 para <=10 USD, 20 para <=20 USD, etc., 51 para >50 USD.
+  "name": "Nombre conciso y atractivo del evento (ej. Concierto de Jazz, Exposición de Arte). Máximo 80 caracteres.",
+  "description": "Descripción breve y clara del evento, explicando qué es y por qué es interesante. Máximo 150 caracteres. Evita frases como 'click aquí', 'más información', 'lee el artículo completo'.",
+  "location": "Ubicación específica del evento (ej. 'Parque O'Higgins, Santiago', 'Online', 'Teatro Municipal de Valparaíso'). SIEMPRE debe ser un lugar físico o 'Online'. Si es un lugar muy genérico como solo 'Santiago' o 'Nacional', intenta ser más específico. Si no hay ubicación clara, pon 'Por confirmar'.",
+  "date": "Fecha del evento en formato AAAA-MM-DD (ej. '2025-08-15'). Si es un rango de fechas, pon la fecha de inicio. Si es un evento continuo sin fecha de inicio fija o una actividad genérica sin fecha clara, pon 'Sin fecha'.",
+  "budget": 0 | 10 | 20 | 30 | 40 | 50 | 51, // 0 para Gratis, -1 para precio desconocido, 10 para <=10 USD, 20 para <=20 USD, etc., 51 para >50 USD.
   "planType": "solo" | "pareja" | "grupo" | "familiar" | "cualquiera", // Cómo se disfruta mejor el evento
   "sourceUrl": "URL original del evento"
 }
@@ -145,8 +157,9 @@ Fecha Original (si aplica): ${eventData.rawDate || 'No especificado'}
             const parsedResult = JSON.parse(jsonString);
 
             if (parsedResult.isEvent) {
-                parsedResult.name = parsedResult.name || eventData.name || 'Sin Título';
-                parsedResult.description = parsedResult.description || eventData.description?.substring(0,150) || 'Sin descripción.';
+                // Validación básica de los campos después del parseo de la IA
+                parsedResult.name = (parsedResult.name && parsedResult.name.length <= 80) ? parsedResult.name : eventData.name?.substring(0,80) || 'Evento sin título';
+                parsedResult.description = (parsedResult.description && parsedResult.description.length <= 150) ? parsedResult.description : eventData.description?.substring(0,150) || 'Sin descripción.';
                 parsedResult.location = parsedResult.location || eventData.location || 'Por confirmar';
                 parsedResult.date = parsedResult.date || 'Sin fecha';
                 parsedResult.budget = parsedResult.budget !== undefined ? parsedResult.budget : -1;
@@ -163,74 +176,63 @@ Fecha Original (si aplica): ${eventData.rawDate || 'No especificado'}
     }
 }
 
-// --- LISTA DE FUENTES PROPORCIONADA POR EL USUARIO ---
-// ¡IMPORTANTE: Esta definición DEBE estar ANTES de la función fetchAllEvents!
+// --- LISTA DE FUENTES PROPORCIONADA POR EL USUARIO (Optimizada) ---
 const sources = [
     // API
-    { name: "Eventbrite", type: "api", city: "Santiago", scrape: scrapeEventbriteApi },
+    { name: "Eventbrite", type: "api", city: "Santiago", scrape: scrapeEventbriteApi }, // Mantener Santiago, o duplicar para otras ciudades principales
 
-    // Nivel 1
+    // Nivel 1 - Agregadores y Culturales Grandes (Alta probabilidad de eventos)
     { name: "PanoramasGratis.cl", type: "html", url: "https://panoramasgratis.cl/", city: "Nacional", scrape: scrapeHtmlArticle },
-    { name: "ChileCultura.gob.cl", type: "html", url: "https://chilecultura.gob.cl/", city: "Nacional", scrape: scrapeHtmlArticle },
     { name: "SantiagoCultura.cl", type: "html", url: "https://www.santiagocultura.cl/", city: "Santiago", scrape: scrapeHtmlArticle },
     { name: "ValpoCultura.cl", type: "html", url: "https://valpocultura.cl/", city: "Valparaíso", scrape: scrapeHtmlArticle },
     { name: "ConcepciónCultural.cl", type: "html", url: "https://www.concepcioncultural.cl/", city: "Concepción", scrape: scrapeHtmlArticle },
     { name: "TodoEnConce.cl", type: "html", url: "https://www.todoenconce.cl/", city: "Concepción", scrape: scrapeHtmlArticle },
-    { name: "Día de los Patrimonios", type: "html", url: "https://www.diadelospatrimonios.cl/", city: "Nacional", scrape: scrapeHtmlArticle },
-    // Nivel 2
+    { name: "Día de los Patrimonios", type: "html", url: "https://www.diadelospatrimonios.cl/", city: "Nacional", scrape: scrapeHtmlArticle }, // Evento anual, pero importante
     { name: "Centro Gabriela Mistral (GAM)", type: "html", url: "https://gam.cl/cartelera/", city: "Santiago", scrape: scrapeHtmlArticle },
     { name: "Centro Cultural La Moneda", type: "html", url: "https://www.cclm.cl/actividades/", city: "Santiago", scrape: scrapeHtmlArticle },
     { name: "Teatro Municipal de Santiago", type: "html", url: "https://municipal.cl/cartelera", city: "Santiago", scrape: scrapeHtmlArticle },
     { name: "Corp. Cultural Las Condes", type: "html", url: "https://www.culturallascondes.cl/", city: "Santiago", scrape: scrapeHtmlArticle },
-    { name: "Corp. Cultural Lo Barnechea", type: "html", url: "https://www.corporacionculturaldelobarnechea.cl/", city: "Santiago", scrape: scrapeHtmlArticle },
     { name: "Cultura Providencia", type: "html", url: "https://culturaprovidencia.cl/", city: "Santiago", scrape: scrapeHtmlArticle },
+
+    // Nivel 2 - Museos y Universidades (A menudo con agenda cultural)
     { name: "Biblioteca Nacional", type: "html", url: "https://www.bibliotecanacional.gob.cl/", city: "Santiago", scrape: scrapeHtmlArticle },
     { name: "Biblioteca de Santiago", type: "html", url: "https://www.bibliotecasantiago.gob.cl/", city: "Santiago", scrape: scrapeHtmlArticle },
     { name: "Universidad de Chile (Agenda)", type: "html", url: "https://uchile.cl/agenda", city: "Santiago", scrape: scrapeHtmlArticle },
-    { name: "CEAC U. de Chile", type: "html", url: "https://www.ceacuchile.cl/", city: "Santiago", scrape: scrapeHtmlArticle },
     { name: "USACH (Agenda)", type: "html", url: "https://www.usach.cl/agenda-usach", city: "Santiago", scrape: scrapeHtmlArticle },
     { name: "Planetario USACH", type: "html", url: "https://planetariochile.cl/", city: "Santiago", scrape: scrapeHtmlArticle },
     { name: "Museo Nacional de Historia Natural", type: "html", url: "https://www.mnhn.gob.cl/", city: "Santiago", scrape: scrapeHtmlArticle },
     { name: "Museo de la Memoria y DD.HH.", type: "html", url: "https://museodelamemoria.cl/", city: "Santiago", scrape: scrapeHtmlArticle },
     { name: "Museo Chileno de Arte Precolombino", type: "html", url: "https://museo.precolombino.cl/", city: "Santiago", scrape: scrapeHtmlArticle },
     { name: "Museo Artequin", type: "html", url: "https://artequin.cl/", city: "Santiago", scrape: scrapeHtmlArticle },
-    // Nivel 3
+
+    // Nivel 3 - Especializados (Cine, Música, Deportes - si el usuario los quiere, pueden no ser gratis)
     { name: "Cineteca Nacional de Chile", type: "html", url: "https://www.cclm.cl/cineteca-nacional-de-chile/", city: "Santiago", scrape: scrapeHtmlArticle },
     { name: "CineChile.cl", type: "html", url: "https://cinechile.cl/cartelera/", city: "Nacional", scrape: scrapeHtmlArticle },
-    { name: "Retina Latina", type: "html", url: "https://www.retinalatina.org/", city: "Nacional", scrape: scrapeHtmlArticle },
-    { name: "Testing en Chile", type: "html", url: "https://www.testingenchile.cl/", city: "Santiago", scrape: scrapeHtmlArticle },
-    { name: "Congreso Futuro", type: "html", url: "https://congresofuturo.cl/", city: "Nacional", scrape: scrapeHtmlArticle },
-    { name: "Bicineta.cl", type: "html", url: "https://www.bicineta.cl/eventos", city: "Nacional", scrape: scrapeHtmlArticle },
-    { name: "TusDesafios.com", type: "html", url: "https://tusdesafios.com/ciclismo/chile", city: "Nacional", scrape: scrapeHtmlArticle },
-    { name: "TicketSport.cl", type: "html", url: "https://ticketsport.cl/eventos", city: "Nacional", scrape: scrapeHtmlArticle },
-    { name: "IBBY Chile", type: "html", url: "https://www.ibbychile.cl/", city: "Santiago", scrape: scrapeHtmlArticle },
-    { name: "Calavera Lectora", type: "html", url: "https://calaveralectora.org/", city: "Nacional", scrape: scrapeHtmlArticle },
-    { name: "Bandsintown", type: "html", url: "https://www.bandsintown.com/es/c/chile", city: "Nacional", scrape: scrapeHtmlArticle },
-    // Nivel 4 (RSS)
+    { name: "Retina Latina", type: "html", url: "https://www.retinalatina.org/", city: "Nacional", scrape: scrapeHtmlArticle }, // Cine online, a menudo gratis
+    { name: "Testing en Chile", type: "html", url: "https://www.testingenchile.cl/", city: "Santiago", scrape: scrapeHtmlArticle }, // Eventos IT
+    { name: "Congreso Futuro", type: "html", url: "https://congresofuturo.cl/", city: "Nacional", scrape: scrapeHtmlArticle }, // Gran evento anual
+    { name: "Bicineta.cl", type: "html", url: "https://www.bicineta.cl/eventos", city: "Nacional", scrape: scrapeHtmlArticle }, // Eventos de ciclismo
+    { name: "IBBY Chile", type: "html", url: "https://www.ibbychile.cl/", city: "Santiago", scrape: scrapeHtmlArticle }, // Literatura infantil
+    { name: "Calavera Lectora", type: "html", url: "https://calaveralectora.org/", city: "Nacional", scrape: scrapeHtmlArticle }, // Literatura
+    { name: "Bandsintown", type: "html", url: "https://www.bandsintown.com/es/c/chile", city: "Nacional", scrape: scrapeHtmlArticle }, // Conciertos (pueden ser de pago)
+
+    // Nivel 4 - RSS Feeds (Alta calidad si filtran bien con IA)
     { name: "Santiago Secreto (RSS)", type: "rss", url: "https://santiagosecreto.com/feed/", city: "Santiago", scrape: scrapeRssFeed },
     { name: "La Tercera Finde (RSS)", type: "rss", url: "https://www.latercera.com/finde/feed/", city: "Nacional", scrape: scrapeRssFeed },
     { name: "Chilevisión Panoramas (RSS)", type: "rss", url: "https://www.chilevision.cl/tag/panoramas-gratis/feed", city: "Nacional", scrape: scrapeRssFeed },
     { name: "Chile es Tuyo (RSS)", type: "rss", url: "https://chileestuyo.cl/feed/", city: "Nacional", scrape: scrapeRssFeed },
     { name: "El Mostrador Cultura (RSS)", type: "rss", url: "https://www.elmostrador.cl/cultura/feed/", city: "Nacional", scrape: scrapeRssFeed },
     { name: "Diario Concepción Cultura (RSS)", type: "rss", url: "https://www.diarioconcepcion.cl/cultura/feed/", city: "Concepción", scrape: scrapeRssFeed },
-    // Nivel 5 (HTML)
-    { name: "Municipalidad de Arica", type: "html", url: "https://www.muniarica.cl/", city: "Arica", scrape: scrapeHtmlArticle },
-    { name: "Municipalidad de Iquique", type: "html", url: "https://www.municipioiquique.cl/", city: "Iquique", scrape: scrapeHtmlArticle },
-    { name: "Municipalidad de Antofagasta", type: "html", url: "https://www.municipalidadantofagasta.cl/", city: "Antofagasta", scrape: scrapeHtmlArticle },
-    { name: "Municipalidad de La Serena", type: "html", url: "https://www.laserena.cl/", city: "La Serena", scrape: scrapeHtmlArticle },
-    { name: "Municipalidad de Viña del Mar", type: "html", url: "https://www.munivina.cl/", city: "Viña del Mar", scrape: scrapeHtmlArticle },
-    { name: "Municipalidad de Rancagua", type: "html", url: "https://www.rancagua.cl/", city: "Rancagua", scrape: scrapeHtmlArticle },
-    { name: "Municipalidad de Talca", type: "html", url: "https://www.talca.cl/", city: "Talca", scrape: scrapeHtmlArticle },
-    { name: "Municipalidad de Temuco", type: "html", url: "https://www.temuco.cl/", city: "Temuco", scrape: scrapeHtmlArticle },
-    { name: "Municipalidad de Valdivia", type: "html", url: "https://www.munivaldivia.cl/", city: "Valdivia", scrape: scrapeHtmlArticle },
-    { name: "Municipalidad de Puerto Montt", type: "html", url: "https://www.puertomontt.cl/", city: "Puerto Montt", scrape: scrapeHtmlArticle },
-    { name: "Municipalidad de Coquimbo", type: "html", url: "https://www.municoquimbo.cl/", city: "Coquimbo", scrape: scrapeHtmlArticle },
-    { name: "Municipalidad de Calama", type: "html", url: "https://www.municipalidadcalama.cl/", city: "Calama", scrape: scrapeHtmlArticle },
-    { name: "Municipalidad de Copiapó", type: "html", url: "https://www.copiapo.cl/", city: "Copiapó", scrape: scrapeHtmlArticle },
-    { name: "Municipalidad de Chillán", type: "html", url: "https://www.municipalidadchillan.cl/", city: "Chillán", scrape: scrapeHtmlArticle },
-    { name: "Municipalidad de Osorno", type: "html", url: "https://www.municipalidadosorno.cl/", city: "Osorno", scrape: scrapeHtmlArticle },
-    { name: "Municipalidad de Punta Arenas", type: "html", url: "https://www.puntaarenas.cl/", city: "Punta Arenas", scrape: scrapeHtmlArticle },
-    { name: "Municipalidad de Coyhaique", type: "html", url: "https://www.coyhaique.cl/", city: "Coyhaique", scrape: scrapeHtmlArticle },
+    
+    // Nivel 5 - Municipalidades principales con sección de cultura/agenda (Requiere que la IA filtre bien)
+    { name: "Municipalidad de Antofagasta", type: "html", url: "https://www.municipalidadantofagasta.cl/cultura/", city: "Antofagasta", scrape: scrapeHtmlArticle }, // URL más específica si existe
+    { name: "Municipalidad de La Serena", type: "html", url: "https://www.laserena.cl/agenda/", city: "La Serena", scrape: scrapeHtmlArticle }, // URL más específica si existe
+    { name: "Municipalidad de Coquimbo", type: "html", url: "https://www.municoquimbo.cl/cultura/", city: "Coquimbo", scrape: scrapeHtmlArticle }, // URL más específica si existe
+    { name: "Municipalidad de Viña del Mar", type: "html", url: "https://www.munivina.cl/agenda/", city: "Viña del Mar", scrape: scrapeHtmlArticle }, // URL más específica si existe
+    { name: "Municipalidad de Puerto Montt", type: "html", url: "https://www.puertomontt.cl/cultura/", city: "Puerto Montt", scrape: scrapeHtmlArticle }, // URL más específica si existe
+    // NOTA: Para las municipalidades, idealmente deberías buscar la URL directa de su sección "Agenda" o "Cultura"
+    // en lugar de la portada, para obtener mejores resultados y menos "ruido". Si las URL de arriba no existen,
+    // usa la portada y confía mucho en la IA.
 ];
 
 
@@ -244,7 +246,6 @@ async function fetchAllEvents() {
                     console.error("[Eventbrite] EVENTBRITE_API_TOKEN no está configurado.");
                     return;
                 }
-                // Añadido page_size=50 para obtener más eventos de Eventbrite
                 const apiUrl = `https://www.eventbriteapi.com/v3/events/search/?location.address=${encodeURIComponent(source.city)}%2C+Chile&price=free&page_size=50&token=${EVENTBRITE_API_TOKEN}`;
                 console.log(`[Eventbrite] Intentando buscar en URL: ${apiUrl}`);
                 try {
@@ -292,12 +293,12 @@ async function fetchAllEvents() {
                     allEvents.push({
                         name: aiProcessedResult.name,
                         description: aiProcessedResult.description,
-                        imageUrl: item.imageUrl,
+                        imageUrl: item.imageUrl, // Mantiene la URL de imagen original
                         sourceUrl: aiProcessedResult.sourceUrl,
-                        city: aiProcessedResult.location,
+                        city: aiProcessedResult.location, // La IA debería dar una ubicación más específica
                         planType: aiProcessedResult.planType,
                         budget: aiProcessedResult.budget,
-                        location: aiProcessedResult.location,
+                        location: aiProcessedResult.location, 
                         date: aiProcessedResult.date
                     });
                 } else {
@@ -317,7 +318,7 @@ async function fetchAllEvents() {
 }
 
 // --- API ENDPOINTS ---
-app.get("/", (req, res) => res.send("Motor de Eventis v9.4 funcionando (con IA Gemini)."));
+app.get("/", (req, res) => res.send("Motor de Eventis v10.0 funcionando (Fuentes Optimizadas + Chatbot)."));
 
 app.get("/events", async (req, res) => {
     if (!JSONBIN_API_KEY || !JSONBIN_BIN_ID) {
@@ -356,27 +357,39 @@ app.get("/run-scrape", async (req, res) => {
         res.status(500).send("Error al guardar los eventos en la bodega. Revisa los logs.");
     }
 });
-// --- Nuevo API Endpoint para el Chatbot ---
-app.post("/recommend-event-ai", express.json(), async (req, res) => {
-    const { question, currentEvents } = req.body; // Recibe la pregunta y los eventos actuales
+
+// --- NUEVO ENDPOINT PARA EL CHATBOT DE IA ---
+app.post("/recommend-event-ai", async (req, res) => {
+    const { question, currentEvents } = req.body; // Recibe la pregunta del usuario y los eventos que el frontend ya tiene
+    
     if (!geminiModel) {
-        return res.status(500).json({ error: "El modelo de IA para el chatbot no está inicializado." });
+        return res.status(500).json({ error: "El modelo de IA para el chatbot no está inicializado. Verifica GEMINI_API_KEY." });
     }
 
     try {
-        // El prompt debe instruir a la IA a actuar como un asistente de eventos
-        // y a basar sus recomendaciones en 'currentEvents' si se proporcionan,
-        // o a preguntar más detalles si no puede ayudar.
-        const chatPrompt = `Eres un asistente amable y útil para recomendar eventos en Chile.
-        El usuario pregunta: "${question}".
-        
-        Aquí hay una lista de eventos disponibles que podrían ser relevantes (si la lista está vacía, no hay eventos cargados):
-        ${currentEvents && currentEvents.length > 0 ? JSON.stringify(currentEvents.slice(0, 15), null, 2) : 'No hay eventos específicos cargados en la lista actual del usuario.'}
-        
-        Basado en la pregunta del usuario y los eventos disponibles:
-        1. Si la pregunta es sobre un tipo de evento o característica (ej. "eventos gratis", "conciertos en Santiago", "planes para familia"), intenta recomendar 1-3 eventos *específicos* de la lista proporcionada. Si no hay ninguno que coincida, díselo amablemente.
-        2. Si la pregunta es muy general ("¿qué hay hoy?", "¿qué me recomiendas?"), sugiere que el usuario use los filtros de la página o que especifique más qué tipo de plan busca.
-        3. Mantén tus respuestas concisas y amigables. No inventes eventos que no estén en la lista. Si no puedes responder con los eventos dados, di que no encontraste un evento específico para su solicitud y sugiere usar los filtros o preguntar de otra manera.`;
+        // Prepara los eventos para el contexto de la IA. Limita para no exceder tokens.
+        const eventsContext = currentEvents && currentEvents.length > 0
+            ? currentEvents.slice(0, 15).map(e => ({
+                name: e.name,
+                description: e.description,
+                location: e.location,
+                date: e.date,
+                budget: e.budget === 0 ? 'Gratis' : (e.budget === -1 ? 'Precio no especificado' : `Hasta $${e.budget} USD`),
+                planType: e.planType
+              }))
+            : [];
+
+        const chatPrompt = `Eres un asistente amable, útil y conciso para recomendar eventos en Chile.
+El usuario pregunta: "${question}".
+
+Aquí tienes una lista de eventos disponibles que podrían ser relevantes para la recomendación del usuario (si la lista está vacía, no hay eventos específicos cargados en este momento):
+${eventsContext.length > 0 ? JSON.stringify(eventsContext, null, 2) : 'No hay eventos específicos cargados en la lista actual. Puedes sugerirle al usuario que use los filtros de la página.'}
+
+Basado en la pregunta del usuario y los eventos disponibles:
+1. Si la pregunta es sobre un tipo de evento o característica (ej. "eventos gratis", "conciertos en Santiago", "planes para familia"), intenta recomendar 1-3 eventos *específicos* de la lista proporcionada. Si no hay ninguno que coincida, díselo amablemente.
+2. Si la pregunta es muy general ("¿qué hay hoy?", "¿qué me recomiendas?"), sugiere que el usuario use los filtros de la página o que especifique más qué tipo de plan busca.
+3. Si el usuario pregunta algo no relacionado con eventos, o algo que no puedes responder, díselo amablemente.
+4. Mantén tus respuestas concisas (máx. 200 caracteres) y amigables. No inventes eventos que no estén en la lista. Si no puedes responder con los eventos dados, di que no encontraste un evento específico para su solicitud y sugiere usar los filtros o preguntar de otra manera.`;
 
         const result = await geminiModel.generateContent(chatPrompt);
         const responseText = result.response.text();
@@ -384,9 +397,11 @@ app.post("/recommend-event-ai", express.json(), async (req, res) => {
 
     } catch (error) {
         console.error("Error en el endpoint de recomendación de IA:", error);
-        res.status(500).json({ error: "No se pudo generar una recomendación en este momento. Intenta de nuevo más tarde." });
+        res.status(500).json({ error: "Lo siento, no se pudo generar una recomendación en este momento. Intenta de nuevo más tarde." });
     }
 });
+
+
 const listener = app.listen(process.env.PORT || 3000, () => {
-    console.log("Tu app Eventis v9.4 está escuchando en el puerto " + listener.address().port);
+    console.log("Tu app Eventis v10.0 está escuchando en el puerto " + listener.address().port);
 });
