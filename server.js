@@ -1,4 +1,4 @@
-// server.js - v9.1 (Corrección de ReferenceError: sources is not defined)
+// server.js - v9.2 (Versión final con correcciones y IA Gemini)
 // Este robot utiliza IA para analizar y reescribir la información de eventos.
 
 const express = require("express");
@@ -24,8 +24,10 @@ const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
 let geminiModel;
 if (GEMINI_API_KEY) {
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-    geminiModel = genAI.getGenerativeModel({ model: "gemini-pro" });
-    console.log("IA Gemini inicializada.");
+    // Cambiado a 'gemini-1.0-pro' para mayor compatibilidad y disponibilidad
+    // Si este modelo sigue dando 404, prueba con 'gemini-1.5-flash' o 'gemini-1.5-pro'
+    geminiModel = genAI.getGenerativeModel({ model: "gemini-1.0-pro" }); 
+    console.log("IA Gemini inicializada con modelo gemini-1.0-pro.");
 } else {
     console.warn("ADVERTENCIA: GEMINI_API_KEY no está configurada. La IA no se utilizará para el análisis.");
 }
@@ -107,7 +109,7 @@ const scrapeEventbriteApi = (apiResponse) => {
 async function processWithAI(eventData) {
     if (!geminiModel) {
         console.warn("[IA Gemini] Modelo no inicializado. Saltando análisis con IA.");
-        return null;
+        return { isEvent: false }; // Si la IA no está activa, por defecto se descarta para evitar basura
     }
 
     const prompt = `Analiza el siguiente contenido que podría ser un evento.
@@ -120,8 +122,8 @@ Si es un evento, responde SOLAMENTE con un JSON en este formato:
   "description": "Descripción breve y clara del evento, máximo 150 caracteres. Evita frases como 'click aquí' o 'más información'.",
   "location": "Ubicación del evento (ej. 'Santiago', 'Parque X', 'Online')",
   "date": "Fecha del evento en formato AAAA-MM-DD (ej. '2025-08-15'). Si hay rango de fechas, pon la de inicio. Si no hay fecha clara o es evento continuo, pon 'Sin fecha'.",
-  "budget": 0 | 10 | 20 | 30 | 40 | 50 | 51,
-  "planType": "solo" | "pareja" | "grupo" | "familiar" | "cualquiera",
+  "budget": 0 | 10 | 20 | 30 | 40 | 50 | 51, // 0 para gratis, -1 para precio desconocido, 10 para <=10 USD, 20 para <=20 USD, etc., 51 para >50 USD.
+  "planType": "solo" | "pareja" | "grupo" | "familiar" | "cualquiera", // Cómo se disfruta mejor el evento
   "sourceUrl": "URL original del evento"
 }
 
@@ -163,7 +165,7 @@ Fecha Original (si aplica): ${eventData.rawDate || 'No especificado'}
 }
 
 // --- LISTA DE FUENTES PROPORCIONADA POR EL USUARIO ---
-// ¡¡¡ ESTA SECCIÓN FUE MOVIDA ARRIBA DE fetchAllEvents !!!
+// ¡IMPORTANTE: Esta definición DEBE estar ANTES de la función fetchAllEvents!
 const sources = [
     // API
     { name: "Eventbrite", type: "api", city: "Santiago", scrape: scrapeEventbriteApi },
@@ -235,8 +237,6 @@ const sources = [
 
 async function fetchAllEvents() {
     let allEvents = [];
-    // La línea 174 en el código anterior era aquí, donde 'sources' no estaba definido aún.
-    // Ahora 'sources' está definido arriba de esta función.
     const fetchPromises = sources.map(async (source) => {
         try {
             let items = [];
@@ -317,7 +317,7 @@ async function fetchAllEvents() {
 }
 
 // --- API ENDPOINTS ---
-app.get("/", (req, res) => res.send("Motor de Eventis v9.1 funcionando (con IA Gemini)."));
+app.get("/", (req, res) => res.send("Motor de Eventis v9.2 funcionando (con IA Gemini)."));
 
 app.get("/events", async (req, res) => {
     if (!JSONBIN_API_KEY || !JSONBIN_BIN_ID) {
@@ -358,5 +358,5 @@ app.get("/run-scrape", async (req, res) => {
 });
 
 const listener = app.listen(process.env.PORT || 3000, () => {
-    console.log("Tu app Eventis v9.1 está escuchando en el puerto " + listener.address().port);
+    console.log("Tu app Eventis v9.2 está escuchando en el puerto " + listener.address().port);
 });
