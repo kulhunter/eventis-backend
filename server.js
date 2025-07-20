@@ -1,6 +1,6 @@
-// server.js - v3.0
-// Este es tu robot scraper inteligente, viviendo en Glitch.
-// Analiza eventos de más de 100 fuentes para inferir el tipo de plan y presupuesto.
+// server.js - v4.0
+// Este robot es mucho más inteligente. Visita las páginas para buscar imágenes
+// y analiza el texto para descartar noticias y quedarse solo con eventos reales.
 
 const express = require("express");
 const axios = require("axios");
@@ -24,8 +24,6 @@ const sources = [
     { name: "Parlante", type: "rss", url: "https://parlante.cl/feed/", city: "Nacional" },
     { name: "Rockaxis", type: "rss", url: "https://rockaxis.com/feed", city: "Nacional" },
     { name: "Cine Chile", type: "rss", url: "https://cinechile.cl/feed/", city: "Nacional" },
-
-    // --- MEDIOS NACIONALES ---
     { name: "El Mostrador", type: "rss", url: "https://www.elmostrador.cl/feed/", city: "Nacional" },
     { name: "El Dínamo", type: "rss", url: "https://www.eldinamo.cl/feed/", city: "Nacional" },
     { name: "La Tercera", type: "rss", url: "https://www.latercera.com/feed/", city: "Nacional" },
@@ -42,8 +40,6 @@ const sources = [
     { name: "Emol", type: "rss", url: "https://www.emol.com/rss/movil/", city: "Nacional" },
     { name: "Diario U Chile", type: "rss", url: "https://radio.uchile.cl/feed/", city: "Nacional" },
     { name: "El Ciudadano", type: "rss", url: "https://www.elciudadano.com/feed/", city: "Nacional" },
-    
-    // --- MEDIOS REGIONALES (RSS) ---
     { name: "Soy Chile", type: "rss", url: "https://www.soychile.cl/rss/", city: "Nacional" },
     { name: "El Mercurio de Valparaíso", type: "rss", url: "https://www.mercuriovalpo.cl/rss/movil/?r=1", city: "Valparaíso" },
     { name: "La Estrella de Valparaíso", type: "rss", url: "https://www.estrellavalpo.cl/rss/movil/?r=1", city: "Valparaíso" },
@@ -68,8 +64,6 @@ const sources = [
     { name: "El Austral de Osorno", type: "rss", url: "https://www.australosorno.cl/rss/movil/?r=1", city: "Osorno" },
     { name: "El Diario de Aysén", type: "rss", url: "https://www.diarioaysen.cl/feed.xml", city: "Coyhaique" },
     { name: "La Prensa Austral", type: "rss", url: "https://laprensaaustral.cl/feed/", city: "Punta Arenas" },
-    
-    // --- RADIOS (RSS) ---
     { name: "Radio ADN", type: "rss", url: "https://www.adnradio.cl/feed.xml", city: "Nacional" },
     { name: "Radio Futuro", type: "rss", url: "https://www.futuro.cl/feed", city: "Nacional" },
     { name: "Radio Concierto", type: "rss", url: "https://www.concierto.cl/feed", city: "Nacional" },
@@ -83,8 +77,6 @@ const sources = [
     { name: "Radio Disney", type: "rss", url: "https://www.radiodisney.cl/feed", city: "Nacional" },
     { name: "Radio Infinita", type: "rss", url: "https://www.infinita.cl/feed/", city: "Nacional" },
     { name: "Radio Universo", type: "rss", url: "https://www.universo.cl/feed", city: "Nacional" },
-
-    // --- MUNICIPALIDADES Y CULTURA (HTML) ---
     { name: "Santiago Cultura", type: "html", url: "https://www.santiagocultura.cl/agenda-cultural/", city: "Santiago" },
     { name: "Providencia", type: "html", url: "https://providencia.cl/provi/panoramas", city: "Santiago" },
     { name: "Las Condes Cultural", type: "html", url: "https://www.culturallascondes.cl/", city: "Santiago" },
@@ -102,30 +94,45 @@ const sources = [
     { name: "Museo Histórico Nacional", type: "html", url: "https://www.mhn.gob.cl/cartelera", city: "Santiago" },
     { name: "Museo de la Memoria", type: "html", url: "https://ww3.museodelamemoria.cl/category/actividades-cartelera/", city: "Santiago" },
     { name: "Centro Cultural Palacio La Moneda", type: "html", url: "https://www.cclm.cl/exposiciones-y-actividades/", city: "Santiago" },
-    // ... y más de 30 fuentes adicionales de municipios y cultura.
 ];
 
-// --- MOTOR DE ANÁLISIS (IA SIMULADA) ---
+// --- MOTOR DE ANÁLISIS Y EXTRACCIÓN ---
+async function getImageFromUrl(url) {
+    try {
+        const { data } = await axios.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 5000 });
+        const $ = cheerio.load(data);
+        const imageUrl = $('meta[property="og:image"]').attr('content') || $('img').first().attr('src');
+        if (imageUrl && !imageUrl.startsWith('http')) {
+            return new URL(imageUrl, url).href;
+        }
+        return imageUrl;
+    } catch (error) {
+        return null;
+    }
+}
+
 function analyzeEventContent(title, description) {
     const fullText = (title + ' ' + description).toLowerCase();
     let planType = 'cualquiera';
-    let budget = 0; // Por defecto es 0 (Gratis)
+    let budget = 0;
 
-    const coupleKeywords = ['pareja', 'romántico', 'cena', 'dos por uno', '2x1', 'aniversario', 'san valentín'];
-    const groupKeywords = ['grupo', 'amigos', 'festival', 'fiesta', 'equipo', 'banda', 'masivo'];
-    const soloKeywords = ['taller', 'charla', 'exposición', 'conferencia', 'seminario', 'personal', 'individual'];
+    const eventKeywords = ['entradas', 'tickets', 'cuándo', 'dónde', 'lugar', 'horario', 'inscríbete', 'reserva', 'invita', 'participa'];
+    if (!eventKeywords.some(k => fullText.includes(k))) return null; // No parece un evento
+
+    const coupleKeywords = ['pareja', 'romántico', 'cena', '2x1'];
+    const groupKeywords = ['grupo', 'amigos', 'festival', 'fiesta'];
+    const soloKeywords = ['taller', 'charla', 'exposición', 'conferencia'];
 
     if (coupleKeywords.some(k => fullText.includes(k))) planType = 'pareja';
     else if (groupKeywords.some(k => fullText.includes(k))) planType = 'grupo';
     else if (soloKeywords.some(k => fullText.includes(k))) planType = 'solo';
 
-    const freeKeywords = ['gratis', 'gratuito', 'entrada liberada', 'sin costo', 'acceso gratuito'];
+    const freeKeywords = ['gratis', 'gratuito', 'entrada liberada', 'sin costo'];
     if (!freeKeywords.some(k => fullText.includes(k))) {
         const priceMatch = fullText.match(/\$?(\d{1,3}(?:[.,]\d{3})*)/);
         if (priceMatch) {
             const price = parseInt(priceMatch[1].replace(/[.,]/g, ''));
             const usdPrice = price > 1000 ? price / 1000 : price;
-
             if (usdPrice <= 10) budget = 10;
             else if (usdPrice <= 20) budget = 20;
             else if (usdPrice <= 30) budget = 30;
@@ -133,7 +140,7 @@ function analyzeEventContent(title, description) {
             else if (usdPrice <= 50) budget = 50;
             else budget = 51;
         } else {
-            budget = -1; // Presupuesto desconocido
+            budget = -1;
         }
     }
     
@@ -144,11 +151,11 @@ async function fetchEvents() {
     let allEvents = [];
     const fetchPromises = sources.map(async (source) => {
         try {
-            const response = await axios.get(source.url, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 10000 });
+            const { data } = await axios.get(source.url, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 10000 });
             let items = [];
             
             if (source.type === 'rss') {
-                const parsedData = await parseStringPromise(response.data);
+                const parsedData = await parseStringPromise(data);
                 items = (parsedData.rss.channel[0].item || []).map(item => ({
                     title: item.title?.[0] || '',
                     link: item.link?.[0] || '',
@@ -156,53 +163,49 @@ async function fetchEvents() {
                     pubDate: item.pubDate?.[0] || new Date().toISOString()
                 }));
             } else { // html
-                const $ = cheerio.load(response.data);
+                const $ = cheerio.load(data);
                 $('article').each((i, el) => {
                     const title = $(el).find('h1, h2, h3').first().text().trim();
                     let link = $(el).find('a').first().attr('href');
-                    if (link && !link.startsWith('http')) {
-                        link = new URL(link, source.url).href;
-                    }
+                    if (link && !link.startsWith('http')) link = new URL(link, source.url).href;
                     const description = $(el).find('p').first().text().trim();
                     if(title && link) items.push({ title, link, description, pubDate: new Date().toISOString() });
                 });
             }
 
-            items.forEach(item => {
+            for (const item of items) {
                 if (item.title && item.link) {
                     const analysis = analyzeEventContent(item.title, item.description);
-                    allEvents.push({
-                        name: item.title,
-                        sourceUrl: item.link,
-                        city: source.city,
-                        date: new Date(item.pubDate).toISOString().slice(0, 10),
-                        planType: analysis.planType,
-                        budget: analysis.budget
-                    });
+                    if (analysis) { // Solo procesa si parece un evento
+                        const imageUrl = await getImageFromUrl(item.link);
+                        allEvents.push({
+                            name: item.title,
+                            sourceUrl: item.link,
+                            city: source.city,
+                            date: new Date(item.pubDate).toISOString().slice(0, 10),
+                            planType: analysis.planType,
+                            budget: analysis.budget,
+                            imageUrl: imageUrl
+                        });
+                    }
                 }
-            });
-        } catch (error) {
-            // Silently ignore sources that fail
-        }
+            }
+        } catch (error) { /* Silently ignore sources that fail */ }
     });
 
     await Promise.allSettled(fetchPromises);
     return allEvents;
 }
 
-// --- ENDPOINTS DE LA API ---
-app.get("/", (req, res) => {
-  res.send("El motor de Eventis está funcionando correctamente.");
-});
-
+// --- API ENDPOINTS ---
+app.get("/", (req, res) => res.send("Motor de Eventis v4 funcionando."));
 app.get("/events", async (req, res) => {
     console.log("Petición recibida, analizando eventos de 100+ fuentes...");
     const events = await fetchEvents();
-    console.log(`Análisis completo. Se encontraron ${events.length} eventos.`);
+    console.log(`Análisis completo. Se encontraron ${events.length} eventos de calidad.`);
     res.json(events);
 });
 
-// Inicia el servidor
 const listener = app.listen(process.env.PORT, () => {
     console.log("Tu app está escuchando en el puerto " + listener.address().port);
 });
