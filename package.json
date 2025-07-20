@@ -1,19 +1,29 @@
 {
   "name": "eventis-backend",
   "version": "1.0.0",
-  "description": "El motor que busca eventos para el sitio Eventis.",
+  "description": "Backend para el scraping y gestión de eventos Eventis",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
+  "keywords": [
+    "events",
+    "scraper",
+    "nodejs",
+    "eventbrite",
+    "gemini-ai"
+  ],
+  "author": "Tu Nombre",
+  "license": "ISC",
   "dependencies": {
-    "express": "^4.19.2",
+    "@google/generative-ai": "^0.15.0",  <-- ¡ESTA ES LA LÍNEA NUEVA Y CRUCIAL!
     "axios": "^1.7.2",
+    "cheerio": "^1.0.0-rc.12",
     "cors": "^2.8.5",
-    "xml2js": "^0.6.2",
-    "cheerio": "^1.0.0-rc.12"
+    "express": "^4.19.2",
+    "xml2js": "^0.6.2"
   },
   "engines": {
-    "node": "18.x"
+    "node": ">=18.0.0" 
   }
 }
