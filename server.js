@@ -1,4 +1,4 @@
-// server.js - v10.3 (Filtro de Eventos Futuros + Eventbrite Paginación + Fuentes Optimizadas + Chatbot AI)
+// server.js - v10.4 (Manejo de Cuota Gemini + Filtro de Eventos Futuros + Paginación Eventbrite)
 // Este robot utiliza IA para analizar y reescribir la información de eventos.
 
 const express = require("express");
@@ -30,6 +30,10 @@ if (GEMINI_API_KEY) {
 } else {
     console.warn("ADVERTENCIA: GEMINI_API_KEY no está configurada. La IA no se utilizará para el análisis.");
 }
+
+// --- Función de retardo para manejar cuotas de API ---
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const GEMINI_REQUEST_DELAY_MS = 4500; // Aproximadamente 4.5 segundos para 15 solicitudes/minuto (60/15 = 4 segundos, añadimos un buffer)
 
 // --- LÓGICA GENÉRICA DE SCRAPING ---
 const scrapeRssFeed = (feed) => {
@@ -143,6 +147,7 @@ Fecha Original (si aplica): ${eventData.rawDate || 'No especificado'}
 `;
 
     try {
+        await sleep(GEMINI_REQUEST_DELAY_MS); // <-- AÑADIDO: Pausa antes de cada llamada a la IA
         const result = await geminiModel.generateContent(prompt);
         const responseText = result.response.text();
         console.log(`[IA Gemini] Respuesta cruda para "${eventData.name.substring(0, 30)}...": ${responseText.substring(0, 200)}...`);
@@ -167,6 +172,10 @@ Fecha Original (si aplica): ${eventData.rawDate || 'No especificado'}
         return { isEvent: false };
     } catch (aiError) {
         console.error(`[IA Gemini] Error al llamar o parsear IA para "${eventData.name}":`, aiError.message);
+        // Si el error es por cuota, lo logueamos y retornamos false, pero no se rompe el proceso
+        if (aiError.message.includes('429 Too Many Requests')) {
+            console.warn(`[IA Gemini] Límite de cuota excedido para "${eventData.name}". Intentando de nuevo en la próxima ejecución.`);
+        }
         return { isEvent: false };
     }
 }
@@ -345,7 +354,7 @@ async function fetchAllEvents() {
 }
 
 // --- API ENDPOINTS ---
-app.get("/", (req, res) => res.send("Motor de Eventis v10.3 funcionando (Filtro de Eventos Futuros + Eventbrite Paginación + Fuentes Optimizadas + Chatbot)."));
+app.get("/", (req, res) => res.send("Motor de Eventis v10.4 funcionando (Manejo de Cuota Gemini + Filtro de Eventos Futuros + Paginación Eventbrite)."));
 
 app.get("/events", async (req, res) => {
     if (!JSONBIN_API_KEY || !JSONBIN_BIN_ID) {
@@ -417,17 +426,23 @@ Basado en la pregunta del usuario y los eventos disponibles:
 3. Si el usuario pregunta algo no relacionado con eventos, o algo que no puedes responder, díselo amablemente.
 4. Mantén tus respuestas concisas (máx. 200 caracteres) y amigables. No inventes eventos que no estén en la lista. Si no puedes responder con los eventos dados, di que no encontraste un evento específico para su solicitud y sugiere usar los filtros o preguntar de otra manera.`;
 
+        await sleep(GEMINI_REQUEST_DELAY_MS); // <-- AÑADIDO: Pausa antes de la llamada a la IA del chatbot también
         const result = await geminiModel.generateContent(chatPrompt);
         const responseText = result.response.text();
         res.json({ recommendation: responseText });
 
     } catch (error) {
         console.error("Error en el endpoint de recomendación de IA:", error);
-        res.status(500).json({ error: "Lo siento, no se pudo generar una recomendación en este momento. Intenta de nuevo más tarde." });
+        if (error.message.includes('429 Too Many Requests')) {
+            console.warn(`[IA Gemini Chatbot] Límite de cuota excedido para el chatbot.`);
+            res.status(429).json({ error: "Lo siento, el asistente está muy ocupado. Por favor, intenta de nuevo en un minuto." });
+        } else {
+            res.status(500).json({ error: "Lo siento, no se pudo generar una recomendación en este momento. Intenta de nuevo más tarde." });
+        }
     }
 });
 
 
 const listener = app.listen(process.env.PORT || 3000, () => {
-    console.log("Tu app Eventis v10.3 está escuchando en el puerto " + listener.address().port);
+    console.log("Tu app Eventis v10.4 está escuchando en el puerto " + listener.address().port);
 });
