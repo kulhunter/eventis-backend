@@ -1,4 +1,4 @@
-// server.js - v8.0
+// server.js - v8.1 (Actualización para depuración de Eventbrite)
 // Este robot es la versión definitiva y funcional. Utiliza la lista de fuentes del usuario,
 // prioriza encontrar eventos reales y gratuitos, y es flexible con las imágenes
 // para asegurar que el sitio siempre tenga contenido.
@@ -63,26 +63,39 @@ const scrapeHtmlArticle = ($, baseURI) => {
 
 const scrapeEventbriteApi = (apiResponse) => {
     const events = [];
-    if (!apiResponse.events) return events;
-    apiResponse.events.forEach(event => {
+    // Asegúrate de que la respuesta tenga la estructura esperada, a veces los eventos están en data.events
+    const eventList = apiResponse.events || apiResponse.data?.events; // Fallback para apiResponse.data.events
+    
+    if (!eventList || !Array.isArray(eventList)) {
+        console.warn("Eventbrite API response did not contain an 'events' array or was not an array.", apiResponse);
+        return events;
+    }
+
+    eventList.forEach(event => {
         try {
+            const descriptionText = event.summary?.substring(0, 150) + '...' || 
+                                    event.description?.text?.substring(0, 150) + '...' || ''; // Usar description.text si summary no existe
+            
             events.push({
-                name: event.name.text,
-                description: (event.summary || '').substring(0, 150) + '...',
+                name: event.name?.text,
+                description: descriptionText,
                 imageUrl: event.logo ? event.logo.original.url : null,
                 sourceUrl: event.url,
                 location: event.venue?.address?.localized_address_display || 'Online o por confirmar',
-                date: new Date(event.start.local).toISOString().slice(0, 10),
+                date: event.start?.local ? new Date(event.start.local).toISOString().slice(0, 10) : 'Fecha no especificada',
             });
-        } catch(e) { /* Silently fail */ }
+        } catch(e) { 
+            console.error("Error al procesar un evento de Eventbrite:", e.message, event);
+        }
     });
     return events;
 };
 
 // --- LISTA DE FUENTES PROPORCIONADA POR EL USUARIO ---
 const sources = [
-    // API
-    { name: "Eventbrite", type: "api", city: "Nacional", scrape: scrapeEventbriteApi },
+    // API (Se mueve al principio para depuración)
+    { name: "Eventbrite", type: "api", city: "Santiago", scrape: scrapeEventbriteApi }, // CAMBIADO a "Santiago" para mejor compatibilidad
+
     // Nivel 1
     { name: "PanoramasGratis.cl", type: "html", url: "https://panoramasgratis.cl/", city: "Nacional", scrape: scrapeHtmlArticle },
     { name: "ChileCultura.gob.cl", type: "html", url: "https://chilecultura.gob.cl/", city: "Nacional", scrape: scrapeHtmlArticle },
@@ -157,8 +170,9 @@ function analyzeEventContent(title, description) {
     const eventKeywords = ['entradas', 'tickets', 'cuándo', 'dónde', 'lugar', 'horario', 'inscríbete', 'reserva', 'invita', 'participa', 'festival', 'concierto', 'exposición', 'obra', 'función', 'cartelera'];
     const negativeKeywords = ['estos son', 'los mejores', 'la guía', 'hablamos con', 'entrevista', 'reseña', 'opinión', 'análisis', 'recuerda', 'revisa'];
     
+    // Si no parece un evento accionable o es una noticia/articulo, se descarta.
     if (!eventKeywords.some(k => fullText.includes(k)) || negativeKeywords.some(k => title.toLowerCase().includes(k))) {
-        return null; // No parece un evento accionable, se descarta.
+        return null; 
     }
 
     const freeKeywords = ['gratis', 'gratuito', 'entrada liberada', 'sin costo', 'acceso gratuito'];
@@ -168,15 +182,16 @@ function analyzeEventContent(title, description) {
         const priceMatch = fullText.match(/\$?(\d{1,3}(?:[.,]\d{3})*)/);
         if (priceMatch) {
             const price = parseInt(priceMatch[1].replace(/[.,]/g, ''));
-            const usdPrice = price > 1000 ? price / 1000 : price;
+            // Suponemos que si el precio es muy alto sin miles (ej. 500), es pesos chilenos y se divide para estimar USD
+            const usdPrice = price > 1000 ? price / 1000 : price; 
             if (usdPrice <= 10) budget = 10;
             else if (usdPrice <= 20) budget = 20;
             else if (usdPrice <= 30) budget = 30;
             else if (usdPrice <= 40) budget = 40;
             else if (usdPrice <= 50) budget = 50;
-            else budget = 51;
+            else budget = 51; // Más de 50 USD
         } else {
-            budget = -1;
+            budget = -1; // No se pudo determinar el precio, se asume con costo desconocido
         }
     }
 
@@ -197,9 +212,32 @@ async function fetchAllEvents() {
         try {
             let items = [];
             if (source.type === 'api') {
-                const { data } = await axios.get(`https://www.eventbriteapi.com/v3/events/search/?location.address=${source.city}%2C+Chile&price=free&token=${EVENTBRITE_API_TOKEN}`, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 15000 });
-                items = source.scrape(data);
-            } else {
+                // --- Depuración Eventbrite ---
+                if (!EVENTBRITE_API_TOKEN) {
+                    console.error("EVENTBRITE_API_TOKEN no está configurado.");
+                    return; // Sale de la promesa si no hay token
+                }
+                const apiUrl = `https://www.eventbriteapi.com/v3/events/search/?location.address=${encodeURIComponent(source.city)}%2C+Chile&price=free&token=${EVENTBRITE_API_TOKEN}`;
+                console.log(`[Eventbrite] Intentando buscar en URL: ${apiUrl}`);
+                try {
+                    const { data } = await axios.get(apiUrl, { 
+                        headers: { 
+                            'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+                            'Accept': 'application/json' 
+                        }, 
+                        timeout: 15000 
+                    });
+                    console.log(`[Eventbrite] Respuesta cruda (primeros 500 chars): ${JSON.stringify(data).substring(0, 500)}...`);
+                    items = source.scrape(data);
+                    console.log(`[Eventbrite] Eventos extraídos y pre-procesados: ${items.length}`);
+                } catch (apiError) {
+                    console.error(`[Eventbrite] Error en la llamada API para ${source.city}:`, apiError.message);
+                    if (apiError.response) {
+                        console.error(`[Eventbrite] Status: ${apiError.response.status}, Data: ${JSON.stringify(apiError.response.data)}`);
+                    }
+                }
+            } else { // HTML o RSS
+                console.log(`[Scraping] Intentando buscar en: ${source.url}`);
                 const { data } = await axios.get(source.url, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 10000 });
                 if (source.type === 'rss') {
                     const parsedData = await parseStringPromise(data);
@@ -211,6 +249,7 @@ async function fetchAllEvents() {
                 } else { // html
                     items = source.scrape(cheerio.load(data), source.url);
                 }
+                console.log(`[Scraping] Eventos extraídos de ${source.name}: ${items.length}`);
             }
 
             for (const item of items) {
@@ -220,32 +259,39 @@ async function fetchAllEvents() {
                     allEvents.push({ ...eventData, city: source.city, ...analysis });
                 }
             }
-        } catch (error) { /* Silently ignore sources that fail */ }
+        } catch (error) { 
+            console.error(`Error general al procesar la fuente ${source.name} (${source.url || 'API'}):`, error.message);
+            // Si el error tiene una respuesta HTTP, la logueamos
+            if (error.response) {
+                console.error(`Status: ${error.response.status}, Data: ${JSON.stringify(error.response.data)}`);
+            }
+        }
     });
 
-    await Promise.allSettled(fetchPromises);
+    await Promise.allSettled(fetchPromises); // Usamos Promise.allSettled para que todas las promesas se resuelvan (éxito o fallo)
     return allEvents;
 }
 
 // --- API ENDPOINTS ---
-app.get("/", (req, res) => res.send("Motor de Eventis v8 funcionando."));
+app.get("/", (req, res) => res.send("Motor de Eventis v8.1 funcionando (depuración Eventbrite)."));
 
 app.get("/events", async (req, res) => {
     if (!JSONBIN_API_KEY || !JSONBIN_BIN_ID) {
-        return res.status(500).json({ error: "El servidor no está configurado." });
+        return res.status(500).json({ error: "El servidor no está configurado correctamente (JSONBin API Key/ID faltantes)." });
     }
     try {
         const response = await axios.get(`${JSONBIN_URL}/latest`, { headers: { 'X-Master-Key': JSONBIN_API_KEY } });
         res.json(response.data.record.events);
     } catch (error) {
-        res.status(500).json({ error: "No se pudo obtener la lista de eventos." });
+        console.error("Error al obtener eventos de JSONBin:", error.message);
+        res.status(500).json({ error: "No se pudo obtener la lista de eventos de la bodega." });
     }
 });
 
 app.get("/run-scrape", async (req, res) => {
     const { key } = req.query;
     if (key !== SCRAPE_SECRET_KEY) {
-        return res.status(401).send("Clave secreta inválida.");
+        return res.status(401).send("Clave secreta inválida. Acceso no autorizado.");
     }
     
     console.log("Scraping activado...");
@@ -258,12 +304,16 @@ app.get("/run-scrape", async (req, res) => {
         await axios.put(JSONBIN_URL, { events: eventsToStore }, {
             headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_API_KEY }
         });
-        res.status(200).send(`Scraping completado. ${events.length} eventos de calidad guardados.`);
+        res.status(200).send(`Scraping completado. ${events.length} eventos de calidad guardados en JSONBin.`);
     } catch (error) {
-        res.status(500).send("Error al guardar los eventos en la bodega.");
+        console.error("Error al guardar los eventos en la bodega JSONBin:", error.message);
+        if (error.response) {
+            console.error(`Status: ${error.response.status}, Data: ${JSON.stringify(error.response.data)}`);
+        }
+        res.status(500).send("Error al guardar los eventos en la bodega. Revisa los logs.");
     }
 });
 
-const listener = app.listen(process.env.PORT, () => {
-    console.log("Tu app está escuchando en el puerto " + listener.address().port);
+const listener = app.listen(process.env.PORT || 3000, () => { // Puerto por defecto 3000 si process.env.PORT no está definido
+    console.log("Tu app Eventis está escuchando en el puerto " + listener.address().port);
 });
