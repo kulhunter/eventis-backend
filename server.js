@@ -1,4 +1,4 @@
-// server.js - v9.3 (Versión final con modelo Gemini 2.0-flash)
+// server.js - v9.4 (Versión final consolidada)
 // Este robot utiliza IA para analizar y reescribir la información de eventos.
 
 const express = require("express");
@@ -24,7 +24,7 @@ const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
 let geminiModel;
 if (GEMINI_API_KEY) {
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-    // ¡MODELO FINALMENTE CONFIGURADO A gemini-2.0-flash QUE FUNCIONÓ!
+    // Modelo configurado a 'gemini-2.0-flash' que ha demostrado ser accesible
     geminiModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); 
     console.log("IA Gemini inicializada con modelo gemini-2.0-flash.");
 } else {
@@ -108,7 +108,7 @@ const scrapeEventbriteApi = (apiResponse) => {
 async function processWithAI(eventData) {
     if (!geminiModel) {
         console.warn("[IA Gemini] Modelo no inicializado. Saltando análisis con IA.");
-        return { isEvent: false }; // Si la IA no está activa, por defecto se descarta para evitar basura
+        return { isEvent: false };
     }
 
     const prompt = `Analiza el siguiente contenido que podría ser un evento.
@@ -244,7 +244,8 @@ async function fetchAllEvents() {
                     console.error("[Eventbrite] EVENTBRITE_API_TOKEN no está configurado.");
                     return;
                 }
-                const apiUrl = `https://www.eventbriteapi.com/v3/events/search/?location.address=${encodeURIComponent(source.city)}%2C+Chile&price=free&token=${EVENTBRITE_API_TOKEN}`;
+                // Añadido page_size=50 para obtener más eventos de Eventbrite
+                const apiUrl = `https://www.eventbriteapi.com/v3/events/search/?location.address=${encodeURIComponent(source.city)}%2C+Chile&price=free&page_size=50&token=${EVENTBRITE_API_TOKEN}`;
                 console.log(`[Eventbrite] Intentando buscar en URL: ${apiUrl}`);
                 try {
                     const { data } = await axios.get(apiUrl, { 
@@ -316,7 +317,7 @@ async function fetchAllEvents() {
 }
 
 // --- API ENDPOINTS ---
-app.get("/", (req, res) => res.send("Motor de Eventis v9.3 funcionando (con IA Gemini)."));
+app.get("/", (req, res) => res.send("Motor de Eventis v9.4 funcionando (con IA Gemini)."));
 
 app.get("/events", async (req, res) => {
     if (!JSONBIN_API_KEY || !JSONBIN_BIN_ID) {
@@ -357,5 +358,5 @@ app.get("/run-scrape", async (req, res) => {
 });
 
 const listener = app.listen(process.env.PORT || 3000, () => {
-    console.log("Tu app Eventis v9.3 está escuchando en el puerto " + listener.address().port);
+    console.log("Tu app Eventis v9.4 está escuchando en el puerto " + listener.address().port);
 });
